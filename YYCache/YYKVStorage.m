@@ -118,36 +118,55 @@ static UIApplication *_YYSharedApplication() {
 }
 
 - (BOOL)_dbClose {
+    // If the database is already NULL, we return YES as there is nothing to close.
     if (!_db) return YES;
     
-    int  result = 0;
+    int result = 0;
     BOOL retry = NO;
     BOOL stmtFinalized = NO;
     
-    if (_dbStmtCache) CFRelease(_dbStmtCache);
-    _dbStmtCache = NULL;
+    // Release the prepared statement cache if it exists
+    if (_dbStmtCache) {
+        CFRelease(_dbStmtCache);
+        _dbStmtCache = NULL;
+    }
     
     do {
-        retry = NO;
-        result = sqlite3_close(_db);
+        retry = NO;  // Reset retry flag for this iteration
+        result = sqlite3_close(_db);  // Attempt to close the database
+        
+        // Check for busy or locked database which will necessitate retrying
         if (result == SQLITE_BUSY || result == SQLITE_LOCKED) {
             if (!stmtFinalized) {
-                stmtFinalized = YES;
+                stmtFinalized = YES;  // We will finalize statements on the first busy/locked encounter
                 sqlite3_stmt *stmt;
-                while ((stmt = sqlite3_next_stmt(_db, nil)) != 0) {
-                    sqlite3_finalize(stmt);
-                    retry = YES;
+                
+                // Finalize all active statements
+                while ((stmt = sqlite3_next_stmt(_db, nil)) != NULL) {
+                    // Only finalize if the statement is not NULL
+                    if (stmt != NULL) {
+                        int finalizeResult = sqlite3_finalize(stmt);
+                        // Check the result of finalize call
+                        if (finalizeResult != SQLITE_OK && _errorLogsEnabled) {
+                            NSLog(@"%s line:%d sqlite finalize failed(%d).", __FUNCTION__, __LINE__, finalizeResult);
+                        }
+                        retry = YES;  // Set retry flag to attempt closing again
+                    }
                 }
             }
         } else if (result != SQLITE_OK) {
+            // Log the error if closing the database failed and error logging is enabled
             if (_errorLogsEnabled) {
                 NSLog(@"%s line:%d sqlite close failed (%d).", __FUNCTION__, __LINE__, result);
             }
         }
     } while (retry);
+    
+    // Set the database pointer to NULL to prevent further access
     _db = NULL;
-    return YES;
+    return YES;  // Return YES to indicate that the close operation completed
 }
+
 
 - (BOOL)_dbCheck {
     if (!_db) {
